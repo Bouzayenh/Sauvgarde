@@ -34,14 +34,20 @@ public class Client {
                     break;
                 }
 
-                Path folderPath = Paths.get(folderPathStr);
-                if (!Files.isDirectory(folderPath)) {
-                    System.out.println("The specified path is not a directory.");
-                    continue;
+                try {
+                    Path folderPath = Paths.get(folderPathStr);
+                    if (!Files.isDirectory(folderPath)) {
+                        System.out.println("The specified path is not a directory.");
+                        continue;
+                    }
+
+                    String baseFolderName = folderPath.getFileName().toString(); // Get the name of the base folder
+                    backupFiles(folderPath, allowedExtensions, out, baseFolderName,in);
+                } catch (InvalidPathException e) {
+                    System.out.println("Invalid path: " + folderPathStr);
+                } catch (Exception e) {
+                    System.out.println("An error occurred: " + e.getMessage());
                 }
-
-                backupFiles(folderPath, allowedExtensions, out, in);
-
             }
         } finally {
             System.out.println("Closing connection...");
@@ -51,25 +57,33 @@ public class Client {
         }
     }
 
-    private static void backupFiles(Path folderPath, Set<String> allowedExtensions, ObjectOutputStream out, ObjectInputStream in) {
+    private static void backupFiles(Path folderPath, Set<String> allowedExtensions, ObjectOutputStream out, String baseFolderName, ObjectInputStream in) throws IOException {
         try (Stream<Path> paths = Files.walk(folderPath)) {
-            paths.filter(Files::isRegularFile)
-                    .filter(path -> hasAllowedExtension(path, allowedExtensions))
-                    .forEach(path -> {
-                        try {
-                            byte[] fileContent = Files.readAllBytes(path);
-                            String encodedContent = Base64.getEncoder().encodeToString(fileContent);
-                            out.writeObject(new FileBackup(path.getFileName().toString(), encodedContent));
-                            String confirmation = (String) in.readObject();  // Read confirmation for each file
-                            System.out.println(confirmation);
-                        } catch (IOException | ClassNotFoundException e) {
-                            e.printStackTrace();
-                        }
-                    });
-        } catch (IOException e) {
-            e.printStackTrace();
+            paths.forEach(path -> {
+                if (Files.isDirectory(path)) {
+                    return; // Skip directories themselves, but still process their contents
+                }
+
+                if (!hasAllowedExtension(path, allowedExtensions)) {
+                    return; // Skip files that do not have allowed extensions
+                }
+
+                try {
+                    byte[] fileContent = Files.readAllBytes(path);
+                    String encodedContent = Base64.getEncoder().encodeToString(fileContent);
+                    // Combine base folder name with relative path
+                    String relativePath = baseFolderName + File.separator + folderPath.relativize(path).toString();
+                    out.writeObject(new FileBackup(relativePath, encodedContent));
+                    String confirmation = (String) in.readObject();
+                    System.out.println(confirmation);
+                } catch (IOException | ClassNotFoundException e) {
+                    e.printStackTrace();
+                }
+            });
         }
     }
+
+
 
 
     private static Set<String> loadAllowedExtensions() {

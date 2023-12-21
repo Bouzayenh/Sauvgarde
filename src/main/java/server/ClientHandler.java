@@ -46,30 +46,25 @@ class ClientHandler extends Thread {
         }
     }
 
-    private void saveBackup(FileBackup backup, ObjectOutputStream out) {
-        try {
-            byte[] incomingFileContent = Base64.getDecoder().decode(backup.getFileContent());
-            Path backupPath = Paths.get(Server.BACKUP_DIR, backup.getFileName());
+    private void saveBackup(FileBackup backup, ObjectOutputStream out) throws IOException {
+        String relativePath = backup.getFileName();
+        Path backupPath = Paths.get(Server.BACKUP_DIR, relativePath).normalize();
 
-            // Check if backup already exists
-            if (Files.exists(backupPath)) {
-                byte[] existingFileContent = Files.readAllBytes(backupPath);
-
-                // Compare existing backup with incoming file
-                if (Arrays.equals(incomingFileContent, existingFileContent)) {
-                    out.writeObject("Backup already exists for: " + backup.getFileName());
-                } else {
-                    Files.write(backupPath, incomingFileContent); // Update backup
-                    out.writeObject("Backup updated for: " + backup.getFileName());
-                }
-            } else {
-                Files.write(backupPath, incomingFileContent); // Create new backup
-                out.writeObject("New backup created for: " + backup.getFileName());
-            }
-            out.flush();
-        } catch (IOException e) {
-            e.printStackTrace();
+        // Ensure the path is still within the backup directory
+        if (!backupPath.startsWith(Paths.get(Server.BACKUP_DIR))) {
+            out.writeObject("Invalid file path: " + relativePath);
+            return;
         }
+
+        // Create directories if they don't exist
+        Files.createDirectories(backupPath.getParent());
+
+        byte[] fileContent = Base64.getDecoder().decode(backup.getFileContent());
+        Files.write(backupPath, fileContent);
+        out.writeObject("Backup created for: " + relativePath);
+        out.flush();
     }
+
+
 
 }
