@@ -6,6 +6,8 @@ import java.io.*;
 import java.net.URL;
 import java.nio.file.*;
 import java.security.KeyStore;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.stream.Stream;
 import java.util.Base64;
@@ -27,12 +29,15 @@ public class Client {
 
         try {
             while (true) {
-                System.out.print("Enter the folder path to backup or type 'exit' to quit: ");
+                System.out.print("Enter the folder path to backup/restore or type 'exit' to quit: ");
                 String folderPathStr = scanner.nextLine();
 
                 if ("exit".equalsIgnoreCase(folderPathStr)) {
                     break;
                 }
+
+                System.out.print("Type 'backup' to backup or 'restore' to restore: ");
+                String operation = scanner.nextLine();
 
                 try {
                     Path folderPath = Paths.get(folderPathStr);
@@ -41,8 +46,14 @@ public class Client {
                         continue;
                     }
 
-                    String baseFolderName = folderPath.getFileName().toString(); // Get the name of the base folder
-                    backupFiles(folderPath, allowedExtensions, out, baseFolderName,in);
+                    String baseFolderName = folderPath.getFileName().toString();
+                    if ("backup".equalsIgnoreCase(operation)) {
+                        backupFiles(folderPath, allowedExtensions, out, baseFolderName, in);
+                    } else if ("restore".equalsIgnoreCase(operation)) {
+                        restoreFiles(folderPath, out, in, baseFolderName);
+                    } else {
+                        System.out.println("Invalid operation. Please type 'backup' or 'restore'.");
+                    }
                 } catch (InvalidPathException e) {
                     System.out.println("Invalid path: " + folderPathStr);
                 } catch (Exception e) {
@@ -83,6 +94,59 @@ public class Client {
         }
     }
 
+
+    private static void restoreFiles(Path folderPath, ObjectOutputStream out, ObjectInputStream in, String baseFolderName) throws IOException, NoSuchAlgorithmException {
+        out.writeObject("RESTORE:" + baseFolderName);
+        out.flush();
+
+        while (true) {
+            try {
+                Object response = in.readObject();
+                if (response == null || !(response instanceof FileBackup)) {
+                    break; // End of file transmission
+                }
+
+                FileBackup fileBackup = (FileBackup) response;
+                Path filePath = folderPath.resolve(fileBackup.getFileName());
+                byte[] fileContent = Base64.getDecoder().decode(fileBackup.getFileContent());
+
+                if (!isFileChanged(filePath, fileContent)) {
+                    System.out.println("File is the same, no need to restore: " + filePath);
+                    continue;
+                }
+
+                Files.createDirectories(filePath.getParent());
+                Files.write(filePath, fileContent);
+                System.out.println("Restored: " + filePath);
+            } catch (ClassNotFoundException e) {
+                e.printStackTrace();
+                break;
+            }
+        }
+    }
+
+    private static boolean isFileChanged(Path path, byte[] newContent) throws IOException, NoSuchAlgorithmException {
+        if (!Files.exists(path)) {
+            return true; // File doesn't exist, so it's changed/new
+        }
+
+        // Use checksum comparison for files larger than 50 MB
+        final long fileSizeThreshold = 50 * 1024 * 1024; // 50 MB in bytes
+        long existingFileSize = Files.size(path);
+
+        if (existingFileSize > fileSizeThreshold) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] existingContent = Files.readAllBytes(path);
+            byte[] existingChecksum = digest.digest(existingContent);
+            byte[] newChecksum = digest.digest(newContent);
+
+            return !Arrays.equals(existingChecksum, newChecksum);
+        } else {
+            // For smaller files, use direct byte-by-byte comparison
+            byte[] existingContent = Files.readAllBytes(path);
+            return !Arrays.equals(existingContent, newContent);
+        }
+    }
 
 
 
