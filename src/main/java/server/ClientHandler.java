@@ -10,6 +10,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.List;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -31,10 +33,22 @@ class ClientHandler extends Thread {
             while ((obj = in.readObject()) != null) {
                 if (obj instanceof FileBackup) {
                     FileBackup backup = (FileBackup) obj;
-                    saveBackup(backup, out);
-                } else if (obj instanceof String && ((String) obj).startsWith("RESTORE:")) {
-                    String baseFolderName = ((String) obj).substring(8); // Extract base folder name
-                    restoreFiles(baseFolderName, out);
+                    if (backup.getFileName().endsWith(".zip")) {
+                        handleZipBackup(backup, out);
+                    } else {
+                        saveBackup(backup, out);
+                    }
+                } else if (obj instanceof String) {
+                    String command = (String) obj;
+                    if (command.startsWith("RESTORE:")) {
+                        String baseFolderName = command.substring(8);
+                        restoreFiles(baseFolderName, out);
+                    } else if (command.equals("ZIP_RESTORE_REQUEST")) {
+                        sendZipFileList(out);
+                    } else if (command.startsWith("ZIP_RESTORE:")) {
+                        String zipFileName = command.substring(12);
+                        handleZipRestore(zipFileName, out);
+                    }
                 }
             }
         } catch (EOFException e) {
@@ -104,6 +118,71 @@ class ClientHandler extends Thread {
         }
         out.writeObject(null); // Indicate end of file transmission
     }
+
+
+    private void handleZipBackup(FileBackup backup, ObjectOutputStream out) throws IOException {
+        try {
+            Path zipBackupPath = Paths.get(Server.ZIP_BACKUP_DIR, backup.getFileName()).normalize();
+
+            if (!zipBackupPath.startsWith(Paths.get(Server.ZIP_BACKUP_DIR))) {
+                out.writeObject("Invalid file path: " + backup.getFileName());
+                return;
+            }
+
+            if (Files.notExists(zipBackupPath.getParent())) {
+                Files.createDirectories(zipBackupPath.getParent());
+            }
+
+            byte[] zipData = Base64.getDecoder().decode(backup.getFileContent());
+            SecretKey secretKey = ConfigLoader.getSecretKey(); // Load the secret key
+            byte[] encryptedZipData = encrypt(zipData, secretKey); // Encrypt the zip data
+
+            Files.write(zipBackupPath, encryptedZipData);
+            out.writeObject("Zip backup created for: " + backup.getFileName());
+        } catch (Exception e) {
+            e.printStackTrace();
+            out.writeObject("Error processing zip file: " + backup.getFileName());
+        }
+        out.flush();
+    }
+
+
+    private void sendZipFileList(ObjectOutputStream out) throws IOException {
+        try {
+            List<String> zipFiles = Files.walk(Paths.get(Server.ZIP_BACKUP_DIR))
+                    .filter(Files::isRegularFile)
+                    .map(path -> path.getFileName().toString())
+                    .collect(Collectors.toList());
+
+            out.writeObject(zipFiles);
+        } catch (Exception e) {
+            e.printStackTrace();
+            out.writeObject("Error retrieving zip file list.");
+        }
+        out.flush();
+    }
+
+    private void handleZipRestore(String zipFileName, ObjectOutputStream out) throws IOException {
+        Path zipFilePath = Paths.get(Server.ZIP_BACKUP_DIR, zipFileName);
+        if (Files.notExists(zipFilePath)) {
+            out.writeObject("No zip backup found with the specified name.");
+            return;
+        }
+
+        try {
+            byte[] encryptedZipData = Files.readAllBytes(zipFilePath);
+            SecretKey secretKey = ConfigLoader.getSecretKey(); // Load the secret key
+            byte[] decryptedZipData = decrypt(encryptedZipData, secretKey); // Decrypt the zip data
+
+            String encodedZipData = Base64.getEncoder().encodeToString(decryptedZipData);
+            out.writeObject(new FileBackup(zipFileName, encodedZipData));
+        } catch (Exception e) {
+            e.printStackTrace();
+            out.writeObject("Error processing zip file: " + zipFileName);
+        }
+        out.flush();
+    }
+
 
     // Encryption method
     static byte[] encrypt(byte[] data, SecretKey key) throws Exception {

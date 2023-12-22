@@ -14,9 +14,12 @@ import javax.crypto.SecretKey;
 public class Server {
     private static final int PORT = 8080;
     static final String BACKUP_DIR = "backups";
+    static final String ZIP_BACKUP_DIR = "zip_backups";
+
 
     public static void main(String[] args) throws Exception {
         new File(BACKUP_DIR).mkdir();
+        new File(ZIP_BACKUP_DIR).mkdir();
         SSLContext sslContext = setupSSLContext();
         SSLServerSocketFactory sslServerSocketFactory = sslContext.getServerSocketFactory();
         SSLServerSocket sslServerSocket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(PORT);

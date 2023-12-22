@@ -1,6 +1,8 @@
 package client;
 
 import common.FileBackup;
+import common.ZipUtility;
+
 import javax.net.ssl.*;
 import java.io.*;
 import java.net.URL;
@@ -8,6 +10,7 @@ import java.nio.file.*;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Stream;
 import java.util.Base64;
@@ -47,12 +50,24 @@ public class Client {
                     }
 
                     String baseFolderName = folderPath.getFileName().toString();
-                    if ("backup".equalsIgnoreCase(operation)) {
-                        backupFiles(folderPath, allowedExtensions, out, baseFolderName, in);
-                    } else if ("restore".equalsIgnoreCase(operation)) {
-                        restoreFiles(folderPath, out, in, baseFolderName);
+
+                    System.out.print("Do you want to use zips? (yes/no): ");
+                    String useZip = scanner.nextLine();
+
+                    if ("yes".equalsIgnoreCase(useZip)) {
+                        if ("backup".equalsIgnoreCase(operation)) {
+                            backupWithZip(folderPath, out, baseFolderName, in);
+                        } else if ("restore".equalsIgnoreCase(operation)) {
+                            restoreWithZip(folderPath, out, in); // Pass the folder path for restoration
+                        }
                     } else {
-                        System.out.println("Invalid operation. Please type 'backup' or 'restore'.");
+                        if ("backup".equalsIgnoreCase(operation)) {
+                            backupFiles(folderPath, allowedExtensions, out, baseFolderName, in);
+                        } else if ("restore".equalsIgnoreCase(operation)) {
+                            restoreFiles(folderPath, out, in, baseFolderName);
+                        } else {
+                            System.out.println("Invalid operation. Please type 'backup' or 'restore'.");
+                        }
                     }
                 } catch (InvalidPathException e) {
                     System.out.println("Invalid path: " + folderPathStr);
@@ -124,6 +139,72 @@ public class Client {
             }
         }
     }
+
+    private static void backupWithZip(Path folderPath, ObjectOutputStream out, String baseFolderName, ObjectInputStream in) throws IOException {
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss").format(new Date());
+        String zipFileName = baseFolderName + "_" + timestamp + ".zip";
+        Path zipFilePath = Paths.get(folderPath.getParent().toString(), zipFileName);
+
+        ZipUtility.zipFolder(folderPath, zipFilePath);
+
+        // Send zip file to server
+        byte[] zipData = Files.readAllBytes(zipFilePath);
+        String encodedZipData = Base64.getEncoder().encodeToString(zipData);
+        out.writeObject(new FileBackup(zipFileName, encodedZipData));
+        out.flush();
+
+        try {
+            String confirmation = (String) in.readObject();
+            System.out.println(confirmation);
+        } catch (ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void restoreWithZip(Path folderPath, ObjectOutputStream out, ObjectInputStream in) throws IOException {
+        out.writeObject("ZIP_RESTORE_REQUEST");
+        out.flush();
+
+        try {
+            Object response = in.readObject();
+            if (response instanceof List) {
+                @SuppressWarnings("unchecked")
+                List<String> zipFiles = (List<String>) response;
+                for (int i = 0; i < zipFiles.size(); i++) {
+                    System.out.println((i + 1) + ". " + zipFiles.get(i));
+                }
+
+                System.out.print("Enter the number of the zip to restore: ");
+                int choice = new Scanner(System.in).nextInt();
+                if (choice < 1 || choice > zipFiles.size()) {
+                    System.out.println("Invalid choice.");
+                    return;
+                }
+
+                out.writeObject("ZIP_RESTORE:" + zipFiles.get(choice - 1));
+                out.flush();
+
+                // Receive the zip file
+                FileBackup fileBackup = (FileBackup) in.readObject();
+                if (fileBackup != null) {
+                    byte[] zipData = Base64.getDecoder().decode(fileBackup.getFileContent());
+                    Path zipFilePath = folderPath.resolve(fileBackup.getFileName());
+                    Files.write(zipFilePath, zipData);
+
+                    // Unzip the file
+                    ZipUtility.unzip(zipFilePath, folderPath);
+                    System.out.println("Restored: " + zipFilePath);
+                } else {
+                    System.out.println("No file received for restoration.");
+                }
+            } else {
+                System.out.println("No zip files available for restore.");
+            }
+        } catch (ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
 
     private static boolean isFileChanged(Path path, byte[] newContent) throws IOException, NoSuchAlgorithmException {
         if (!Files.exists(path)) {
